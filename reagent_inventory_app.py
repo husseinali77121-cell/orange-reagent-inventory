@@ -532,7 +532,8 @@ PRINT_CSS = """
 <style>
 @media print {
     header, .stSidebar, [data-testid="stToolbar"], [data-testid="stHeader"],
-    [data-testid="stMultiSelect"], .no-print { display: none !important; }
+    [data-testid="stMultiSelect"], [data-testid="stRadio"],
+    .no-print { display: none !important; }
     .block-container { padding-top: 0 !important; }
     @page { size: A4; margin: 8mm; }
     body, .kit-card table { font-size: 10px !important; }
@@ -574,6 +575,7 @@ PRINT_CSS = """
     background: #f7e6d0; color: #7a5230; font-weight: 700;
     padding: 3px 6px !important; font-size: 0.82rem;
 }
+.notes-box { min-height: 70px; white-space: pre-wrap; }
 </style>
 """
 
@@ -614,12 +616,11 @@ def kit_card_html(row) -> str:
             f'<td colspan="3">{std_table}</td></tr>'
         )
 
-    notes_row = ""
-    if row.get("notes"):
-        notes_row = (
-            f'<tr><td class="label">Notes</td>'
-            f'<td colspan="3">{row["notes"]}</td></tr>'
-        )
+    notes_content = row.get("notes") or ""
+    notes_row = (
+        f'<tr><td class="label">Notes</td>'
+        f'<td colspan="3"><div class="notes-box">{notes_content}</div></td></tr>'
+    )
 
     html = f"""
     <div class="kit-card">
