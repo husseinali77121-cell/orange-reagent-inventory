@@ -50,6 +50,10 @@ COMPANIES = [
 
 SPECIMEN_TYPES = ["Serum", "Plasma EDTA", "Plasma Heparin", "Whole Blood"]
 
+REACTION_TYPES = [
+    "End Point", "Two Point End", "Kinetic", "Fixed Time", "Turbidimetric",
+]
+
 CALIBRATION_TYPES = [
     "Factor (K value)", "Two Point End", "Linear (Multi-Standard)",
     "Non-Linear (Multi-Standard)", "Blank Only",
@@ -93,9 +97,11 @@ def get_conn():
             status TEXT,
             pri_wavelength TEXT,
             sub_wavelength TEXT,
+            reaction_type TEXT,
             linearity_k TEXT,
             linearity_b TEXT,
             multi_standard_json TEXT,
+            notes TEXT,
             created_at TEXT,
             updated_at TEXT
         )
@@ -113,8 +119,8 @@ def get_conn():
     # migration for databases created before later fields existed
     existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(reagents)")}
     new_cols = (
-        "pri_wavelength", "sub_wavelength",
-        "linearity_k", "linearity_b", "multi_standard_json",
+        "pri_wavelength", "sub_wavelength", "reaction_type",
+        "linearity_k", "linearity_b", "multi_standard_json", "notes",
     )
     for col in new_cols:
         if col not in existing_cols:
@@ -290,6 +296,12 @@ def render_form(edit_id=None):
         )
     st.divider()
 
+    reaction_type = st.selectbox(
+        "Reaction type", REACTION_TYPES,
+        index=REACTION_TYPES.index(existing["reaction_type"])
+        if existing.get("reaction_type") in REACTION_TYPES else 0,
+    )
+
     col1, col2 = st.columns([2, 1])
     with col1:
         calibration_type = st.selectbox(
@@ -400,6 +412,11 @@ def render_form(edit_id=None):
         value=existing.get("stock_next_kit", ""),
     )
 
+    notes = st.text_area(
+        "📝 ملاحظات", value=existing.get("notes", ""), height=90,
+        placeholder="أي ملاحظة خاصة بالتحليل: مشاكل تكررت، تنبيهات، تعديلات محلية...",
+    )
+
     st.markdown("---")
     save_col, cancel_col = st.columns([1, 1])
     save_clicked = save_col.button(
@@ -428,6 +445,7 @@ def render_form(edit_id=None):
             rec_date=rec_date.isoformat(),
             opening_date=opening_date.isoformat(),
             calibration_type=calibration_type,
+            reaction_type=reaction_type,
             factor_value=factor_value,
             sample_vol=sample_vol,
             r1_vol=r1_vol,
@@ -446,6 +464,7 @@ def render_form(edit_id=None):
             expected_tests=expected_tests,
             stock_next_kit=stock_next_kit,
             status=status,
+            notes=notes,
         )
         save_record(data, record_id=edit_id)
         st.success("تم الحفظ ✅")
@@ -528,6 +547,7 @@ PRINT_CSS = """
         margin-bottom: 5px !important; font-size: 0.95rem !important;
     }
     .print-caption { font-size: 0.75rem !important; margin-bottom: 4px !important; }
+    .section-row { font-size: 0.68rem !important; padding: 1px 5px !important; }
 }
 .kit-card {
     border: 1px solid #e0a15a;
@@ -550,6 +570,10 @@ PRINT_CSS = """
 .mini-table { margin: 4px 0; }
 .mini-table th, .mini-table td { border: 1px solid #e0c9a8; padding: 2px 6px; font-size: 0.85rem; }
 .mini-table th { background: #f7e6d0; }
+.section-row {
+    background: #f7e6d0; color: #7a5230; font-weight: 700;
+    padding: 3px 6px !important; font-size: 0.82rem;
+}
 </style>
 """
 
@@ -561,6 +585,12 @@ def df_to_html_table(df) -> str:
         cells = "".join(f"<td>{v}</td>" for v in r)
         rows += f"<tr><td class='label'>{idx}</td>{cells}</tr>"
     return f"<table class='mini-table'>{header}{rows}</table>"
+
+
+def section_row(title: str) -> str:
+    return (
+        f'<tr><td colspan="4" class="section-row">{title}</td></tr>'
+    )
 
 
 def kit_card_html(row) -> str:
@@ -584,19 +614,32 @@ def kit_card_html(row) -> str:
             f'<td colspan="3">{std_table}</td></tr>'
         )
 
+    notes_row = ""
+    if row.get("notes"):
+        notes_row = (
+            f'<tr><td class="label">Notes</td>'
+            f'<td colspan="3">{row["notes"]}</td></tr>'
+        )
+
     html = f"""
     <div class="kit-card">
         <h4>{row['company_name']} &nbsp;|&nbsp; Lot: {row['lot_no'] or '—'}
             &nbsp;·&nbsp; <span class="{status_class}">{row['status']}</span></h4>
         <table>
+            {section_row("1) Identification &amp; Specimen")}
             <tr><td class="label">Specimen Type</td><td>{row['specimen_type']}</td>
                 <td class="label">Rec. Date</td><td>{row['rec_date']}</td></tr>
             <tr><td class="label">Opening date</td><td>{row['opening_date']}</td>
                 <td class="label">Kit Expiry Date</td><td>{row['kit_expiry_date']}</td></tr>
-            <tr><td class="label">Calibration type</td><td>{row['calibration_type']}</td>
-                <td class="label">Factor value</td><td>{row['factor_value'] or '—'}</td></tr>
+
+            {section_row("2) Reaction &amp; Calibration")}
+            <tr><td class="label">Reaction type</td><td>{row['reaction_type'] or '—'}</td>
+                <td class="label">Calibration type</td><td>{row['calibration_type']}</td></tr>
+            <tr><td class="label">Factor value</td><td colspan="3">{row['factor_value'] or '—'}</td></tr>
             {linearity_row}
             {multi_std_row}
+
+            {section_row("3) Reagent Ratio &amp; Optical Settings")}
             <tr><td class="label">Sample vol</td><td>{row['sample_vol']}</td>
                 <td class="label">R1 / R2 Vol</td><td>{row['r1_vol']} / {row['r2_vol']}</td></tr>
             <tr><td class="label">Pri / Sub Wavelength</td>
@@ -607,9 +650,15 @@ def kit_card_html(row) -> str:
                     &nbsp;|&nbsp;
                     Sub: Start {row['sub_start'] or '—'} → End {row['sub_end'] or '—'}
                 </td></tr>
+
+            {section_row("4) Procedure")}
+            <tr><td colspan="4">{row['procedure'] or '—'}</td></tr>
+
+            {section_row("5) Stock &amp; QC Follow-up")}
             <tr><td class="label">Expected no. of tests</td><td>{row['expected_tests']}</td>
                 <td class="label">Stock (next kit)</td><td>{row['stock_next_kit'] or '—'}</td></tr>
-            <tr><td class="label">Procedure</td><td colspan="3">{row['procedure'] or '—'}</td></tr>
+
+            {notes_row}
         </table>
     </div>
     """
