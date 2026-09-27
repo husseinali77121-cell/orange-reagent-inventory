@@ -58,17 +58,7 @@ MULTI_STANDARD_TYPES = ("Linear (Multi-Standard)", "Non-Linear (Multi-Standard)"
 
 STATUS_OPTIONS = ["Active", "Stock"]
 
-UNITS = [
-    "ng/mL", "µg/mL", "mg/dL", "g/dL", "mmol/L", "µmol/L",
-    "IU/L", "U/L", "mIU/mL", "pg/mL", "%", "mg/L", "g/L",
-]
-
-CUSTOM_CATEGORIES = ("reagent", "company", "specimen", "unit")
-
-VOL_ROWS = ["SampleVolume(ul)", "SampleRiseVolume", "SampleReduceVolume"]
-VOL_COLS = [
-    "Sample vol. for analysis", "Sample vol. for dilution", "Dilution vol.",
-]
+CUSTOM_CATEGORIES = ("reagent", "company", "specimen")
 
 
 # --------------------------------------------------------------------------
@@ -103,11 +93,6 @@ def get_conn():
             status TEXT,
             pri_wavelength TEXT,
             sub_wavelength TEXT,
-            unit TEXT,
-            volume_grid_json TEXT,
-            prozonecheck_enabled TEXT,
-            prozonecheck_value TEXT,
-            sample_blank_enabled TEXT,
             linearity_k TEXT,
             linearity_b TEXT,
             multi_standard_json TEXT,
@@ -128,8 +113,7 @@ def get_conn():
     # migration for databases created before later fields existed
     existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(reagents)")}
     new_cols = (
-        "pri_wavelength", "sub_wavelength", "unit", "volume_grid_json",
-        "prozonecheck_enabled", "prozonecheck_value", "sample_blank_enabled",
+        "pri_wavelength", "sub_wavelength",
         "linearity_k", "linearity_b", "multi_standard_json",
     )
     for col in new_cols:
@@ -241,23 +225,6 @@ def d(value):
         except ValueError:
             pass
     return date.today()
-
-
-def default_volume_grid():
-    return pd.DataFrame(
-        {col: [0, 0, 0] for col in VOL_COLS}, index=VOL_ROWS
-    )
-
-
-def load_volume_grid(existing_json):
-    if existing_json:
-        try:
-            df = pd.read_json(io.StringIO(existing_json), orient="split")
-            df = df.reindex(index=VOL_ROWS, columns=VOL_COLS, fill_value=0)
-            return df
-        except (ValueError, TypeError):
-            pass
-    return default_volume_grid()
 
 
 def default_multi_standard():
@@ -374,8 +341,8 @@ def render_form(edit_id=None):
         r2_vol = st.text_input("R2 Vol", value=existing.get("r2_vol", ""))
     st.divider()
 
-    st.markdown("**9) Item setting** — مطابقة لشاشة جهاز BIOBASE BK-280")
-    wc1, wc2, wc3 = st.columns(3)
+    st.markdown("**9) Item setting**")
+    wc1, wc2 = st.columns(2)
     with wc1:
         pri_wavelength = st.text_input(
             "Pri- Wavelength", value=existing.get("pri_wavelength", "")
@@ -384,33 +351,6 @@ def render_form(edit_id=None):
         sub_wavelength = st.text_input(
             "Sub- Wavelength", value=existing.get("sub_wavelength", "")
         )
-    with wc3:
-        unit = picker("Unit", "unit", UNITS, "unit", existing.get("unit", ""))
-
-    st.caption(
-        "Sample vol. for analysis / Sample vol. for dilution / Dilution vol."
-    )
-    vol_df = st.data_editor(
-        load_volume_grid(existing.get("volume_grid_json", "")),
-        key="volume_grid_editor", use_container_width=True,
-    )
-    volume_grid_json = vol_df.to_json(orient="split")
-
-    pc1, pc2, pc3 = st.columns([1, 1, 2])
-    with pc1:
-        prozonecheck_enabled = st.checkbox(
-            "prozonecheck", value=str(existing.get("prozonecheck_enabled")) == "1"
-        )
-    with pc2:
-        prozonecheck_value = st.text_input(
-            "قيمة", value=existing.get("prozonecheck_value", ""),
-            disabled=not prozonecheck_enabled, label_visibility="collapsed",
-        )
-    with pc3:
-        sample_blank_enabled = st.checkbox(
-            "Sample Blank", value=str(existing.get("sample_blank_enabled")) == "1"
-        )
-
     st.markdown("**Reading points**")
     hc1, hc2 = st.columns(2)
     hc1.markdown("&nbsp;", unsafe_allow_html=True)
@@ -478,7 +418,6 @@ def render_form(edit_id=None):
         add_custom_option("reagent", reagent_name) if reagent_name not in BK280_REAGENTS else None
         add_custom_option("company", company_name) if company_name not in COMPANIES else None
         add_custom_option("specimen", specimen_type) if specimen_type not in SPECIMEN_TYPES else None
-        add_custom_option("unit", unit) if unit and unit not in UNITS else None
 
         data = dict(
             reagent_name=reagent_name,
@@ -495,11 +434,6 @@ def render_form(edit_id=None):
             r2_vol=r2_vol,
             pri_wavelength=pri_wavelength,
             sub_wavelength=sub_wavelength,
-            unit=unit,
-            volume_grid_json=volume_grid_json,
-            prozonecheck_enabled="1" if prozonecheck_enabled else "0",
-            prozonecheck_value=prozonecheck_value if prozonecheck_enabled else "",
-            sample_blank_enabled="1" if sample_blank_enabled else "0",
             linearity_k=linearity_k,
             linearity_b=linearity_b,
             multi_standard_json=multi_standard_json
@@ -579,8 +513,21 @@ PRINT_CSS = """
 <style>
 @media print {
     header, .stSidebar, [data-testid="stToolbar"], [data-testid="stHeader"],
-    .no-print { display: none !important; }
+    [data-testid="stMultiSelect"], .no-print { display: none !important; }
     .block-container { padding-top: 0 !important; }
+    @page { size: A4; margin: 8mm; }
+    body, .kit-card table { font-size: 10px !important; }
+    h2 { font-size: 1.1rem !important; margin: 0 0 2px 0 !important; }
+    .kit-card {
+        padding: 6px 10px !important; margin-bottom: 6px !important;
+    }
+    .kit-card h4 { font-size: 0.95rem !important; margin: 0 0 3px 0 !important; }
+    .kit-card td { padding: 1px 5px !important; }
+    .group-title {
+        padding: 4px 10px !important; margin-top: 8px !important;
+        margin-bottom: 5px !important; font-size: 0.95rem !important;
+    }
+    .print-caption { font-size: 0.75rem !important; margin-bottom: 4px !important; }
 }
 .kit-card {
     border: 1px solid #e0a15a;
@@ -618,12 +565,6 @@ def df_to_html_table(df) -> str:
 
 def kit_card_html(row) -> str:
     status_class = "status-active" if row["status"] == "Active" else "status-stock"
-    vol_table = df_to_html_table(load_volume_grid(row.get("volume_grid_json", "")))
-    prozone_txt = (
-        f"Yes ({row['prozonecheck_value'] or '—'})"
-        if str(row.get("prozonecheck_enabled")) == "1" else "No"
-    )
-    blank_txt = "Yes" if str(row.get("sample_blank_enabled")) == "1" else "No"
 
     linearity_row = ""
     if row.get("calibration_type") == "Linear (Multi-Standard)":
@@ -658,11 +599,8 @@ def kit_card_html(row) -> str:
             {multi_std_row}
             <tr><td class="label">Sample vol</td><td>{row['sample_vol']}</td>
                 <td class="label">R1 / R2 Vol</td><td>{row['r1_vol']} / {row['r2_vol']}</td></tr>
-            <tr><td class="label">Unit</td><td>{row['unit'] or '—'}</td>
-                <td class="label">Pri / Sub Wavelength</td><td>{row['pri_wavelength'] or '—'} / {row['sub_wavelength'] or '—'}</td></tr>
-            <tr><td class="label">Item setting volumes</td><td colspan="3">{vol_table}</td></tr>
-            <tr><td class="label">Prozonecheck</td><td>{prozone_txt}</td>
-                <td class="label">Sample Blank</td><td>{blank_txt}</td></tr>
+            <tr><td class="label">Pri / Sub Wavelength</td>
+                <td colspan="3">{row['pri_wavelength'] or '—'} / {row['sub_wavelength'] or '—'}</td></tr>
             <tr><td class="label">Reading points</td>
                 <td colspan="3">
                     Pri: Start {row['pri_start'] or '—'} → End {row['pri_end'] or '—'}
@@ -694,13 +632,27 @@ def render_print_view():
         'أو استخدم زر الطباعة تحت.</div>',
         unsafe_allow_html=True,
     )
+
+    reagent_options = sorted(df["reagent_name"].unique())
+    selected = st.multiselect(
+        "اختر الأصناف اللي عايز تطبعها (افتراضيًا الكل)",
+        reagent_options, default=reagent_options, key="print_reagent_filter",
+    )
+    if not selected:
+        st.info("اختر صنف واحد على الأقل لعرضه للطباعة.")
+        return
+    df = df[df["reagent_name"].isin(selected)]
+
     st.markdown(
         "<h2 style='text-align:center;color:#c9601b;'>Reagent Inventory &amp; Lot "
         "Follow-up Sheet<br><span style='font-size:0.6em;color:#7a5230;'>(Active / "
         "Stock)</span></h2>",
         unsafe_allow_html=True,
     )
-    st.caption(f"تاريخ الطباعة: {date.today().isoformat()}")
+    st.markdown(
+        f'<div class="print-caption">تاريخ الطباعة: {date.today().isoformat()}</div>',
+        unsafe_allow_html=True,
+    )
 
     for reagent_name, group in df.groupby("reagent_name", sort=True):
         group = group.sort_values(by="status")
