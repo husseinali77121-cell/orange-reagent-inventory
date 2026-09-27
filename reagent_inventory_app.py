@@ -9,6 +9,7 @@ Run:
 """
 
 import sqlite3
+import textwrap
 import uuid
 from datetime import date, datetime
 
@@ -482,7 +483,7 @@ PRINT_CSS = """
 
 def kit_card_html(row) -> str:
     status_class = "status-active" if row["status"] == "Active" else "status-stock"
-    return f"""
+    html = f"""
     <div class="kit-card">
         <h4>{row['company_name']} &nbsp;|&nbsp; Lot: {row['lot_no'] or '—'}
             &nbsp;·&nbsp; <span class="{status_class}">{row['status']}</span></h4>
@@ -509,6 +510,11 @@ def kit_card_html(row) -> str:
         </table>
     </div>
     """
+    # collapse to a single unindented block so Streamlit's markdown parser
+    # treats it as one continuous raw-HTML block instead of splitting on
+    # whitespace-only lines (which Markdown reinterprets as code blocks)
+    lines = [line.strip() for line in textwrap.dedent(html).strip().splitlines()]
+    return " ".join(line for line in lines if line)
 
 
 def render_print_view():
@@ -535,25 +541,20 @@ def render_print_view():
         group = group.sort_values(by="status")
         html = f'<div class="group-title">🧪 {reagent_name}</div>'
         for _, row in group.iterrows():
-            html += kit_card_html(row)
+            html += " " + kit_card_html(row)
         st.markdown(html, unsafe_allow_html=True)
 
     st.markdown(
-        """
-        <div style="margin-top:40px;display:flex;justify-content:flex-end;">
-            <div style="text-align:center;">
-                <div style="border-top:1px solid #333;width:230px;
-                            margin:0 0 6px auto;"></div>
-                <div style="font-weight:700;color:#333;">Dr. Hussein Ali</div>
-            </div>
-        </div>
-        """,
+        '<div style="margin-top:40px;display:flex;justify-content:flex-end;">'
+        '<div style="text-align:center;">'
+        '<div style="border-top:1px solid #333;width:230px;margin:0 0 6px auto;"></div>'
+        '<div style="font-weight:700;color:#333;">Dr. Hussein Ali</div>'
+        "</div></div>",
         unsafe_allow_html=True,
     )
 
     st.markdown(
-        "<script>function p(){window.print();}</script>"
-        "<button class='no-print' onclick='p()' "
+        "<button class='no-print' onclick='window.print()' "
         "style='padding:8px 18px;border-radius:6px;border:none;"
         "background:#f5822a;color:white;font-weight:700;cursor:pointer;'>"
         "🖨️ طباعة</button>",
