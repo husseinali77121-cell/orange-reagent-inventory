@@ -15,6 +15,7 @@ from datetime import date, datetime
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 # --------------------------------------------------------------------------
 # Constants
@@ -434,7 +435,7 @@ def render_records():
                 c2.markdown(f"{badge}  ·  Exp: {row['kit_expiry_date'] or '—'}")
                 if c3.button("✏️", key=f"edit_{row['id']}", help="تعديل"):
                     st.session_state["edit_id"] = row["id"]
-                    st.session_state["active_tab"] = "add"
+                    st.session_state["nav"] = "add"
                     st.rerun()
                 if c4.button("🗑️", key=f"del_{row['id']}", help="حذف"):
                     delete_record(row["id"])
@@ -553,18 +554,33 @@ def render_print_view():
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        "<button class='no-print' onclick='window.print()' "
-        "style='padding:8px 18px;border-radius:6px;border:none;"
-        "background:#f5822a;color:white;font-weight:700;cursor:pointer;'>"
-        "🖨️ طباعة</button>",
-        unsafe_allow_html=True,
+    # A real component (iframe) is used here instead of st.markdown, because
+    # Streamlit's markdown HTML is injected via innerHTML and browsers do not
+    # reliably fire inline onclick handlers set that way. window.parent.print()
+    # prints the actual app page (outside the iframe), not just the component.
+    components.html(
+        """
+        <button onclick="window.parent.print()"
+            style="padding:8px 18px;border-radius:6px;border:none;
+                   background:#f5822a;color:white;font-weight:700;
+                   font-size:15px;cursor:pointer;">
+            🖨️ طباعة
+        </button>
+        """,
+        height=55,
     )
 
 
 # --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
+
+PAGES = {
+    "add": "➕ إضافة / تعديل",
+    "records": "📋 كل السجلات",
+    "print": "🖨️ عرض للطباعة",
+}
+
 
 def main():
     st.set_page_config(
@@ -577,20 +593,21 @@ def main():
     )
     st.caption("Orange Lab — BIOBASE BK-280 Chemistry Reagents Tracking")
 
-    edit_id = st.session_state.get("edit_id")
-    default_tab = 0 if not edit_id else 0
+    # st.tabs() cannot be switched from code, so the edit (✏️) button could
+    # not jump to the form tab. A session-state-backed radio can be forced.
+    if "nav" not in st.session_state:
+        st.session_state["nav"] = "add"
 
-    tab_add, tab_records, tab_print = st.tabs(
-        ["➕ إضافة / تعديل", "📋 كل السجلات", "🖨️ عرض للطباعة"]
+    nav = st.radio(
+        "nav", list(PAGES.keys()), format_func=lambda k: PAGES[k],
+        key="nav", horizontal=True, label_visibility="collapsed",
     )
 
-    with tab_add:
-        render_form(edit_id=edit_id)
-
-    with tab_records:
+    if nav == "add":
+        render_form(edit_id=st.session_state.get("edit_id"))
+    elif nav == "records":
         render_records()
-
-    with tab_print:
+    else:
         render_print_view()
 
 
