@@ -8,6 +8,7 @@ Run:
     streamlit run reagent_inventory_app.py
 """
 
+import io
 import sqlite3
 import textwrap
 import uuid
@@ -53,10 +54,21 @@ CALIBRATION_TYPES = [
     "Factor (K value)", "Two Point End", "Linear (Multi-Standard)",
     "Non-Linear (Multi-Standard)", "Blank Only",
 ]
+MULTI_STANDARD_TYPES = ("Linear (Multi-Standard)", "Non-Linear (Multi-Standard)")
 
 STATUS_OPTIONS = ["Active", "Stock"]
 
-CUSTOM_CATEGORIES = ("reagent", "company", "specimen")
+UNITS = [
+    "ng/mL", "µg/mL", "mg/dL", "g/dL", "mmol/L", "µmol/L",
+    "IU/L", "U/L", "mIU/mL", "pg/mL", "%", "mg/L", "g/L",
+]
+
+CUSTOM_CATEGORIES = ("reagent", "company", "specimen", "unit")
+
+VOL_ROWS = ["SampleVolume(ul)", "SampleRiseVolume", "SampleReduceVolume"]
+VOL_COLS = [
+    "Sample vol. for analysis", "Sample vol. for dilution", "Dilution vol.",
+]
 
 
 # --------------------------------------------------------------------------
@@ -91,6 +103,14 @@ def get_conn():
             status TEXT,
             pri_wavelength TEXT,
             sub_wavelength TEXT,
+            unit TEXT,
+            volume_grid_json TEXT,
+            prozonecheck_enabled TEXT,
+            prozonecheck_value TEXT,
+            sample_blank_enabled TEXT,
+            linearity_k TEXT,
+            linearity_b TEXT,
+            multi_standard_json TEXT,
             created_at TEXT,
             updated_at TEXT
         )
@@ -105,9 +125,14 @@ def get_conn():
         )
         """
     )
-    # migration for databases created before wavelength fields existed
+    # migration for databases created before later fields existed
     existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(reagents)")}
-    for col in ("pri_wavelength", "sub_wavelength"):
+    new_cols = (
+        "pri_wavelength", "sub_wavelength", "unit", "volume_grid_json",
+        "prozonecheck_enabled", "prozonecheck_value", "sample_blank_enabled",
+        "linearity_k", "linearity_b", "multi_standard_json",
+    )
+    for col in new_cols:
         if col not in existing_cols:
             conn.execute(f"ALTER TABLE reagents ADD COLUMN {col} TEXT")
     conn.commit()
@@ -218,6 +243,44 @@ def d(value):
     return date.today()
 
 
+def default_volume_grid():
+    return pd.DataFrame(
+        {col: [0, 0, 0] for col in VOL_COLS}, index=VOL_ROWS
+    )
+
+
+def load_volume_grid(existing_json):
+    if existing_json:
+        try:
+            df = pd.read_json(io.StringIO(existing_json), orient="split")
+            df = df.reindex(index=VOL_ROWS, columns=VOL_COLS, fill_value=0)
+            return df
+        except (ValueError, TypeError):
+            pass
+    return default_volume_grid()
+
+
+def default_multi_standard():
+    return pd.DataFrame(
+        {"Concentration": [0.0] * 5, "Absorbance": [0.0] * 5},
+        index=[f"Std {i}" for i in range(1, 6)],
+    )
+
+
+def load_multi_standard(existing_json):
+    if existing_json:
+        try:
+            df = pd.read_json(io.StringIO(existing_json), orient="split")
+            df = df.reindex(
+                index=[f"Std {i}" for i in range(1, 6)],
+                columns=["Concentration", "Absorbance"], fill_value=0,
+            )
+            return df
+        except (ValueError, TypeError):
+            pass
+    return default_multi_standard()
+
+
 # --------------------------------------------------------------------------
 # Add / Edit form
 # --------------------------------------------------------------------------
@@ -276,6 +339,29 @@ def render_form(edit_id=None):
         )
         if not needs_factor:
             factor_value = ""
+
+    linearity_k, linearity_b = "", ""
+    multi_standard_json = existing.get("multi_standard_json", "")
+    if calibration_type == "Linear (Multi-Standard)":
+        st.caption("Linearity: Y = KX + b")
+        lc1, lc2 = st.columns(2)
+        with lc1:
+            linearity_k = st.text_input(
+                "K", value=existing.get("linearity_k", "") or "1"
+            )
+        with lc2:
+            linearity_b = st.text_input(
+                "b", value=existing.get("linearity_b", "") or "0"
+            )
+    if calibration_type in MULTI_STANDARD_TYPES:
+        st.caption(
+            "Multi-Standard — أدخل التركيزات الخمس والـ Absorbance المقابل لكل واحدة"
+        )
+        std_df = st.data_editor(
+            load_multi_standard(multi_standard_json),
+            key="multi_standard_editor", use_container_width=True,
+        )
+        multi_standard_json = std_df.to_json(orient="split")
     st.divider()
 
     st.markdown("**8) Sample/Reagent ratio**")
@@ -288,8 +374,8 @@ def render_form(edit_id=None):
         r2_vol = st.text_input("R2 Vol", value=existing.get("r2_vol", ""))
     st.divider()
 
-    st.markdown("**9) Item setting**")
-    wc1, wc2 = st.columns(2)
+    st.markdown("**9) Item setting** — مطابقة لشاشة جهاز BIOBASE BK-280")
+    wc1, wc2, wc3 = st.columns(3)
     with wc1:
         pri_wavelength = st.text_input(
             "Pri- Wavelength", value=existing.get("pri_wavelength", "")
@@ -297,6 +383,32 @@ def render_form(edit_id=None):
     with wc2:
         sub_wavelength = st.text_input(
             "Sub- Wavelength", value=existing.get("sub_wavelength", "")
+        )
+    with wc3:
+        unit = picker("Unit", "unit", UNITS, "unit", existing.get("unit", ""))
+
+    st.caption(
+        "Sample vol. for analysis / Sample vol. for dilution / Dilution vol."
+    )
+    vol_df = st.data_editor(
+        load_volume_grid(existing.get("volume_grid_json", "")),
+        key="volume_grid_editor", use_container_width=True,
+    )
+    volume_grid_json = vol_df.to_json(orient="split")
+
+    pc1, pc2, pc3 = st.columns([1, 1, 2])
+    with pc1:
+        prozonecheck_enabled = st.checkbox(
+            "prozonecheck", value=str(existing.get("prozonecheck_enabled")) == "1"
+        )
+    with pc2:
+        prozonecheck_value = st.text_input(
+            "قيمة", value=existing.get("prozonecheck_value", ""),
+            disabled=not prozonecheck_enabled, label_visibility="collapsed",
+        )
+    with pc3:
+        sample_blank_enabled = st.checkbox(
+            "Sample Blank", value=str(existing.get("sample_blank_enabled")) == "1"
         )
 
     st.markdown("**Reading points**")
@@ -366,6 +478,7 @@ def render_form(edit_id=None):
         add_custom_option("reagent", reagent_name) if reagent_name not in BK280_REAGENTS else None
         add_custom_option("company", company_name) if company_name not in COMPANIES else None
         add_custom_option("specimen", specimen_type) if specimen_type not in SPECIMEN_TYPES else None
+        add_custom_option("unit", unit) if unit and unit not in UNITS else None
 
         data = dict(
             reagent_name=reagent_name,
@@ -382,6 +495,15 @@ def render_form(edit_id=None):
             r2_vol=r2_vol,
             pri_wavelength=pri_wavelength,
             sub_wavelength=sub_wavelength,
+            unit=unit,
+            volume_grid_json=volume_grid_json,
+            prozonecheck_enabled="1" if prozonecheck_enabled else "0",
+            prozonecheck_value=prozonecheck_value if prozonecheck_enabled else "",
+            sample_blank_enabled="1" if sample_blank_enabled else "0",
+            linearity_k=linearity_k,
+            linearity_b=linearity_b,
+            multi_standard_json=multi_standard_json
+            if calibration_type in MULTI_STANDARD_TYPES else "",
             pri_start=pri_start,
             sub_start=sub_start,
             pri_end=pri_end,
@@ -435,7 +557,7 @@ def render_records():
                 c2.markdown(f"{badge}  ·  Exp: {row['kit_expiry_date'] or '—'}")
                 if c3.button("✏️", key=f"edit_{row['id']}", help="تعديل"):
                     st.session_state["edit_id"] = row["id"]
-                    st.session_state["nav"] = "add"
+                    st.session_state["force_nav"] = "add"
                     st.rerun()
                 if c4.button("🗑️", key=f"del_{row['id']}", help="حذف"):
                     delete_record(row["id"])
@@ -478,12 +600,49 @@ PRINT_CSS = """
 }
 .status-active { color: #1a8f3c; font-weight: 700; }
 .status-stock { color: #7a5230; font-weight: 700; }
+.mini-table { margin: 4px 0; }
+.mini-table th, .mini-table td { border: 1px solid #e0c9a8; padding: 2px 6px; font-size: 0.85rem; }
+.mini-table th { background: #f7e6d0; }
 </style>
 """
 
 
+def df_to_html_table(df) -> str:
+    header = "<tr><th></th>" + "".join(f"<th>{c}</th>" for c in df.columns) + "</tr>"
+    rows = ""
+    for idx, r in df.iterrows():
+        cells = "".join(f"<td>{v}</td>" for v in r)
+        rows += f"<tr><td class='label'>{idx}</td>{cells}</tr>"
+    return f"<table class='mini-table'>{header}{rows}</table>"
+
+
 def kit_card_html(row) -> str:
     status_class = "status-active" if row["status"] == "Active" else "status-stock"
+    vol_table = df_to_html_table(load_volume_grid(row.get("volume_grid_json", "")))
+    prozone_txt = (
+        f"Yes ({row['prozonecheck_value'] or '—'})"
+        if str(row.get("prozonecheck_enabled")) == "1" else "No"
+    )
+    blank_txt = "Yes" if str(row.get("sample_blank_enabled")) == "1" else "No"
+
+    linearity_row = ""
+    if row.get("calibration_type") == "Linear (Multi-Standard)":
+        linearity_row = (
+            f'<tr><td class="label">Linearity (Y=KX+b)</td>'
+            f'<td colspan="3">K = {row["linearity_k"] or "—"} '
+            f'&nbsp;|&nbsp; b = {row["linearity_b"] or "—"}</td></tr>'
+        )
+
+    multi_std_row = ""
+    if row.get("calibration_type") in MULTI_STANDARD_TYPES and row.get(
+        "multi_standard_json"
+    ):
+        std_table = df_to_html_table(load_multi_standard(row["multi_standard_json"]))
+        multi_std_row = (
+            f'<tr><td class="label">Multi-Standard points</td>'
+            f'<td colspan="3">{std_table}</td></tr>'
+        )
+
     html = f"""
     <div class="kit-card">
         <h4>{row['company_name']} &nbsp;|&nbsp; Lot: {row['lot_no'] or '—'}
@@ -495,10 +654,15 @@ def kit_card_html(row) -> str:
                 <td class="label">Kit Expiry Date</td><td>{row['kit_expiry_date']}</td></tr>
             <tr><td class="label">Calibration type</td><td>{row['calibration_type']}</td>
                 <td class="label">Factor value</td><td>{row['factor_value'] or '—'}</td></tr>
+            {linearity_row}
+            {multi_std_row}
             <tr><td class="label">Sample vol</td><td>{row['sample_vol']}</td>
                 <td class="label">R1 / R2 Vol</td><td>{row['r1_vol']} / {row['r2_vol']}</td></tr>
-            <tr><td class="label">Pri / Sub Wavelength</td>
-                <td colspan="3">{row['pri_wavelength'] or '—'} / {row['sub_wavelength'] or '—'}</td></tr>
+            <tr><td class="label">Unit</td><td>{row['unit'] or '—'}</td>
+                <td class="label">Pri / Sub Wavelength</td><td>{row['pri_wavelength'] or '—'} / {row['sub_wavelength'] or '—'}</td></tr>
+            <tr><td class="label">Item setting volumes</td><td colspan="3">{vol_table}</td></tr>
+            <tr><td class="label">Prozonecheck</td><td>{prozone_txt}</td>
+                <td class="label">Sample Blank</td><td>{blank_txt}</td></tr>
             <tr><td class="label">Reading points</td>
                 <td colspan="3">
                     Pri: Start {row['pri_start'] or '—'} → End {row['pri_end'] or '—'}
@@ -594,7 +758,13 @@ def main():
     st.caption("Orange Lab — BIOBASE BK-280 Chemistry Reagents Tracking")
 
     # st.tabs() cannot be switched from code, so the edit (✏️) button could
-    # not jump to the form tab. A session-state-backed radio can be forced.
+    # not jump to the form tab. A session-state-backed radio can be forced,
+    # but only by writing to its key *before* the widget is instantiated —
+    # writing to it afterwards (e.g. from inside render_records()) raises
+    # StreamlitWidgetAlreadyInstantiatedError, so a separate "force_nav"
+    # flag is applied here, before the radio widget is created.
+    if "force_nav" in st.session_state:
+        st.session_state["nav"] = st.session_state.pop("force_nav")
     if "nav" not in st.session_state:
         st.session_state["nav"] = "add"
 
